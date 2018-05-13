@@ -7,7 +7,7 @@ www/cgi-bin/comment: compend www/cgi-bin
 	cp $< $@
 
 compend: compend.c
-	gcc -Wall -Wextra -pedantic $< -o $@
+	gcc -Wall -Wextra -Wno-sign-compare -pedantic $< -o $@
 
 httpd:
 	busybox httpd -p 8080 -h www -f
