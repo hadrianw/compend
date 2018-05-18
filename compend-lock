@@ -1,0 +1,7 @@
+#!/bin/sh
+test -e "$1.orig" -o -e "$1.edit" && {
+	echo "File $1 appears already locked"
+	exit -1
+}
+cp "$1" "$1.orig"
+cp "$1.orig" "$1.edit"
