@@ -1,4 +1,4 @@
-WIP
+WIP pseudocode
 
 int
 append(char *src, int pos, char *dst)
@@ -12,6 +12,16 @@ append(char *src, int pos, char *dst)
 	exec(dd bs=BUFSIZ)
 }
 
+wait_until_write_closed(file)
+{
+	// Linux only
+	fd = open(file, rdonly)
+	while(fcntl(fd, F_SETLEASE, F_RDLCK) < 0) {
+		usleep()
+	}
+	close(fd)
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -21,7 +31,7 @@ main(int argc, char *argv[])
 	link(post, post.inflight)
 	rename(post.edit, post)
 
-	wait_until_closed(post.inflight)
+	wait_until_write_closed(post.inflight)
 
 	append(post.inflight, orig.st_size, post)
 
