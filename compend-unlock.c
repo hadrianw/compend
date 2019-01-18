@@ -7,9 +7,15 @@ append(char *src, int pos, char *dst)
 	d = open(dst, O_APPEND)
 	lseek(s, pos, SEEK_POS)
 	
-	fork()
-	in = s, out = d
-	exec(dd bs=BUFSIZ)
+	do {
+		size = sendfile(d, s, &pos, whole_size)
+	} while(size > 0);
+
+	/*or
+
+	read(s, buf)
+	write(d, buf)
+	*/
 }
 
 wait_until_write_closed(file)
