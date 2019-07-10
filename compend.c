@@ -1,4 +1,5 @@
-#include <sys/stat.h>
+#define _DEFAULT_SOURCE
+#include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -6,6 +7,7 @@
 #include <unistd.h>
 #include <linux/seccomp.h>
 #include <sys/prctl.h>
+#include <sys/stat.h>
 #include <sys/syscall.h>
 #include <ctype.h>
 #include <time.h>
@@ -28,86 +30,122 @@ static const char template[] =
 	"</div>\n";
 */
 
-static int
-matchstr(const char *str)
-{
-	int ch;
-	do {
-		ch = getchar();
-	} while(*str && ch != EOF && ch == *str++);
-	if(ch != EOF) {
-		ungetc(ch, stdin);
-	}
-	return *str == '\0';
-}
-
-static int
-getcharx()
-{
-	int ch;
-	do {
-		ch = getchar();
-	} while(ch == '\r');
-	return ch;
-}
-
-// FIXME: proper error checking
 int
-main(void)
+compend(void)
 {
+	int ret;
+	long content_length;
+	char in_buf[8192+1];
+	int in_len;
 	char buf[BUFSIZ];
-	char fbuf[4096 * 4];
-	// FIXME: do not let overflowing of fbuf
-	int flen = 0;
+	int file_fd;
 	FILE *file;
-	int ch;
+	int i;
 	__uint128_t random;
+	char *name;
+	int name_len;
+	char *msg;
+	int msg_len;
 	char id[17] = {0};
 	char timestr[32];
-	int inlen;
 
 	char *path = getenv("PATH_INFO");
 	if(strcmp(path, ALLOWED_PATH)) {
 		fputs("Bad path\n", stderr);
-		syscall(SYS_exit, -1);
 		return -1;
 	}
 
 	if(strcmp(getenv("CONTENT_TYPE"), "text/plain")) {
 		fputs("Bad CONTENT_TYPE\n", stderr);
-		syscall(SYS_exit, -1);
 		return -1;
 	}
-	
-	chdir("..");
-	file = fdopen(open(path+1, O_WRONLY | O_APPEND), "a");
+
+	content_length = strtol(getenv("CONTENT_LENGTH"), NULL, 10);
+	if(content_length < 0 || content_length > (long)sizeof(in_buf)) {
+		fputs("Bad CONTENT_LENGTH\n", stderr);
+		return -1;
+	}
+
+	in_len = fread(in_buf, 1, sizeof(in_buf), stdin);
+	if(in_len >= (int)sizeof(in_buf)) {
+		fputs("Too much data\n", stderr);
+		return -1;
+	}
+
+	if(ferror(stdin) || !feof(stdin) || (content_length > 0 && content_length != in_len)) {
+		perror("Error reading data");
+		return -1;
+	}
+
+	name = in_buf;
+	name_len = in_len;
+
+	if(name_len < (int)strlen(NAMEHDR) || memcmp(name, NAMEHDR, strlen(NAMEHDR))) {
+		fputs("Bad name header\n", stderr);
+		return -1;
+	}
+
+	name = &in_buf[strlen(NAMEHDR)];
+	name_len = in_len - strlen(NAMEHDR);
+
+	char *lf = memchr(name, '\n', name_len);
+	if(lf == NULL) {
+		fputs("Bad name\n", stderr);
+		return -1;
+	}
+	name_len = lf - name;
+
+	msg = &lf[1];
+	msg_len = in_len - strlen(NAMEHDR) - name_len;
+
+	if(msg_len < (int)strlen(MSGHDR) || memcmp(msg, MSGHDR, strlen(MSGHDR))) {
+		fputs("Bad msg header\n", stderr);
+		return -1;
+	}
+
+	msg = &msg[strlen(MSGHDR)];
+	msg_len -= strlen(MSGHDR);
 
 	getentropy(&random, sizeof(random));
 
 	strftime(timestr, sizeof(timestr), "%F %T %z",
 		gmtime(&(time_t){time(NULL)})
 	);
-	
-	prctl(PR_SET_SECCOMP, SECCOMP_MODE_STRICT);
-	// from now on only read, write and _exit syscalls allowed
-	
-	inlen = atoi(getenv("CONTENT_LENGTH"));
-	if(inlen > sizeof(fbuf)) {
-		fputs("Bad CONTENT_LENGTH\n", stderr);
-		syscall(SYS_exit, -1);
+
+	chdir("..");
+	file_fd = open(path+1, O_WRONLY | O_APPEND);
+	if(file_fd == -1) {
+		perror("Error opening file");
 		return -1;
 	}
 
+	do {
+		ret = fcntl(file_fd, F_SETLKW, &(struct flock){
+			.l_type = F_WRLCK,
+			.l_whence = SEEK_SET,
+		});
+	} while(ret == -1 && errno == EINTR);
+	if(ret == -1) {
+		perror("fcntl F_SETLKW");
+		return -1;
+	}
+
+	file = fdopen(file_fd, "a");
+	if(file == NULL) {
+		perror("fdopen");
+		return -1;
+	}
+
+	if(prctl(PR_SET_SECCOMP, SECCOMP_MODE_STRICT) == -1) {
+		perror("prctl PR_SET_SECCOMP SECCOMP_MODE_STRICT");
+		return -1;
+	}
+
+	/**** from now on only read, write and _exit syscalls allowed ****/
+	
 	// explicitly set buffer to avoid fstat probe
-	setbuf(stdin, buf);
-	setbuffer(file, fbuf, sizeof(fbuf));
+	setbuf(file, buf);
 
-	if(!matchstr(NAMEHDR)) {
-		fputs("Bad name header\n", stderr);
-		syscall(SYS_exit, -1);
-		return -1;
-	}
-	
 	fputs("<div id=\"", file);
 	for(int i = 0; i < 16; i++) {
 		id[i] = 'a' + ((random >> i) & 0xf);
@@ -115,8 +153,8 @@ main(void)
 	fputs(id, file);
 	fputs("\">\n<small>", file);
 
-	for(ch = getcharx(); ch != '\n' && ch != EOF; ch = getcharx()) {
-		switch(ch) {
+	for(i = 0; i < name_len; i++) {
+		switch(name[i]) {
 		case '<':
 			fputs("&lt;", file);
 			break;
@@ -127,11 +165,11 @@ main(void)
 			fputs("&amp;", file);
 			break;
 		default:
-			if(iscntrl(ch)) {
+			if(iscntrl(name[i])) {
 				fputc('^',  file);
-				fputc(ch + 64, file);
+				fputc(name[i] + 64, file);
 			} else {
-				fputc(ch, file);
+				fputc(name[i], file);
 			}
 		}
 	}
@@ -142,17 +180,8 @@ main(void)
 
 	fputs("</small>\n<p>\n", file);
 
-	if(!matchstr(MSGHDR)) {
-		fputs("Bad msg header\n", stderr);
-		syscall(SYS_exit, -1);
-		return -1;
-	}
-
-	for(ch = getcharx(); ch != EOF; ch = getcharx()) {
-		if(ch == '\r') {
-			continue;
-		}
-		switch(ch) {
+	for(i = 0; i < msg_len; i++) {
+		switch(msg[i]) {
 		case '<':
 			fputs("&lt;", file);
 			break;
@@ -162,28 +191,30 @@ main(void)
 		case '&':
 			fputs("&amp;", file);
 			break;
+		case '\r':
+			/* do nothing */
+			break;
 		case '\n':
-			ch = getcharx();
-			if(ch != '\n') {
-				fputs("<br>\n", file);
+			if(i+1 >= msg_len) {
+				/* do nothing */
+			} else if(msg[i+1] != '\n') {
+				fputs("<br>", file);
 			} else {
-				do {
-					ch = getcharx();
-				} while(ch == '\n');
-				if(ch != EOF) {
-					fputs("\n<p>\n", file);
-				} else {
-					fputc('\n', file);
+				for(i++; i+1 < msg_len; i++) {
+					if(msg[i+1] != '\r' && msg[i+1] != '\n') {
+						fputs("\n<p>", file);
+						break;
+					}
 				}
 			}
-			ungetc(ch, stdin);
+			fputc('\n', file);
 			break;
 		default:
-			if(iscntrl(ch)) {
+			if(iscntrl(msg[i])) {
 				fputc('^',  file);
-				fputc(ch + 64, file);
+				fputc(msg[i] + 64, file);
 			} else {
-				fputc(ch, file);
+				fputc(msg[i], file);
 			}
 		}
 	}
@@ -202,6 +233,13 @@ main(void)
 	);
 	fflush(stdout);
 
-	syscall(SYS_exit, 0);
 	return 0;
+}
+
+int
+main(void)
+{
+	int ret = compend();
+	syscall(SYS_exit, ret);
+	return ret;
 }
