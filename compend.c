@@ -119,6 +119,12 @@ compend(void)
 		return -1;
 	}
 
+	// FIXME:
+	// The lock is enough to make it safe for interleaving writes,
+	// but the problem remains for interleaved reads and writes.
+	// It can happen that someone sees a part of a comment.
+	// To make it safe use pwrite and change the offset in the end
+	// That makes use of stdio not possible
 	do {
 		ret = fcntl(file_fd, F_SETLKW, &(struct flock){
 			.l_type = F_WRLCK,
