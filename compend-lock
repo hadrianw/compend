@@ -3,5 +3,10 @@ test -e "$1.orig" -o -e "$1.edit" && {
 	echo "File $1 appears already locked"
 	exit -1
 }
+# FIXME: should be a C program using advirsory locking
+# lock post (fcntl setlkw)
+# copy post post.orig
+# unlock
+# copy post.orig post.edit
 cp "$1" "$1.orig"
 cp "$1.orig" "$1.edit"

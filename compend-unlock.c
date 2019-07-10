@@ -2,7 +2,7 @@
 #include <fcntl.h>
 
 // Linux only: uses sendfile
-int
+static int
 copy(int src, off_t off, int dst)
 {
 	struct stat s_stat;
@@ -28,47 +28,67 @@ copy(int src, off_t off, int dst)
 	*/
 }
 
-// Linux only: uses fcntl F_SETLEASE
-int
-wait_until_write_closed(char *path)
+static int
+acquire_write_lock(int fd)
 {
-	int fd = open(file, O_RDONLY);
-	while(fcntl(fd, F_SETLEASE, F_RDLCK) < 0 && errno == EAGAIN) {
-		usleep(500 * 1000)
+	int ret;
+	do {
+		ret = fcntl(fd, F_SETLKW, &(struct flock){
+			.l_type = F_WRLCK,
+			.l_whence = SEEK_SET,
+		});
+	} while(ret == -1 && errno == EINTR);
+	if(ret == -1) {
+		perror("fcntl F_SETLKW");
+		return -1;
 	}
-	// don't care about the return
-	close(fd);
 	return 0;
+}
+
+static int
+release_lock(int fd)
+{
+	return fcntl(fd, F_SETLKW, &(struct flock){
+		.l_type = F_UNLCK,
+		.l_whence = SEEK_SET,
+	});
 }
 
 int
 main(int argc, char *argv[])
 {
-	int live = open("post", O_RDONLY);
+	// FIXME: error checking
+
+	int ret;
 	int orig = open("post.orig", O_RDONLY);
-	int edit = open("post.edit", O_APPEND);
+	struct stat orig_stat;
 	int inflight;
+	int live_edit;
 
-	struct stat o_stat;
-	fstat(orig, &o_stat);
-	copy(live, o_stat.st_size, edit);
-
-	rename("post.edit", "post.orig");
-
+	// An instance of compend can still have the post opened
 	link("post", "post.inflight");
-	inflight = live;
+	inflight = open("post.inflight", O_RDONLY);
 
-	struct stat e_stat;
-	fstat(edit, &e_stat);
+	// Make edit live
 	rename("post.edit", "post");
-	live = edit;
+	live_edit = open("post", O_APPEND);
 
-	wait_until_write_closed(inflight);
+	// FIXME: in case of errors we can lose comments that were inflight
+	// to recover both original and inflight are needed
 
-	//append(post.inflight, orig.st_size, post)
-	copy(inflight, e_stat.st_size, live);
+	// Wait for the last compend instances
+	do {
+		acquire_write_lock(inflight);
+		release_lock(inflight);
+	} while((ret = fcntl(inflight, F_SETLEASE, F_RDLCK)) == -1 && errno == EAGAIN);
 
+	// Copy comments added from the moment of lock to the edited post
+	acquire_write_lock(live_edit);
+	fstat(orig, &orig_stat);
+	copy(inflight, orig_stat.st_size, live_edit);
+
+	unlink("post.orig");
 	unlink("post.inflight");
-	
+
 	return 0;
 }
