@@ -124,7 +124,7 @@ compend(void)
 	// but the problem remains for interleaved reads and writes.
 	// It can happen that someone sees a part of a comment.
 	// To make it safe use pwrite and change the offset in the end
-	// That makes use of stdio not possible
+	// That makes use of stdio and seccomp mode strict not possible
 	do {
 		ret = fcntl(file_fd, F_SETLKW, &(struct flock){
 			.l_type = F_WRLCK,
