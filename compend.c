@@ -95,7 +95,7 @@ compend(void)
 	name_len = lf - name;
 
 	msg = &lf[1];
-	msg_len = in_len - strlen(NAMEHDR) - name_len;
+	msg_len = in_len - strlen(NAMEHDR) - name_len - 1;
 
 	if(msg_len < (int)strlen(MSGHDR) || memcmp(msg, MSGHDR, strlen(MSGHDR))) {
 		fputs("Bad msg header\n", stderr);
