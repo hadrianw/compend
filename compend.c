@@ -1,12 +1,10 @@
-#define _DEFAULT_SOURCE
+#define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <linux/seccomp.h>
-#include <sys/prctl.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <ctype.h>
@@ -29,6 +27,24 @@ static const char template[] =
 	"%.*s"
 	"</div>\n";
 */
+
+struct cookie {
+	int fd;
+	off_t offset;
+};
+
+ssize_t
+cookie_write(void *cookie, const char *buf, size_t size)
+{
+	struct cookie *c = cookie;
+	ssize_t len;
+
+	len = pwrite(c->fd, buf, size, c->offset);
+	if(len > 0) {
+		c->offset += len;
+	}
+	return len;
+}
 
 int
 compend(void)
@@ -112,18 +128,12 @@ compend(void)
 	);
 
 	chdir("..");
-	file_fd = open(path+1, O_WRONLY | O_APPEND);
+	file_fd = open(path+1, O_WRONLY);
 	if(file_fd == -1) {
 		perror("Error opening file");
 		return -1;
 	}
 
-	// FIXME:
-	// The lock is enough to make it safe for interleaving writes,
-	// but the problem remains for interleaved reads and writes.
-	// It can happen that someone sees a part of a comment.
-	// To make it safe use pwrite and change the offset in the end
-	// That makes use of stdio and seccomp mode strict not possible
 	do {
 		ret = fcntl(file_fd, F_SETLKW, &(struct flock){
 			.l_type = F_WRLCK,
@@ -135,19 +145,23 @@ compend(void)
 		return -1;
 	}
 
-	file = fdopen(file_fd, "a");
+	off_t off = lseek(file_fd, 0, SEEK_END);
+	if(off == -1) {
+		perror("lseek SEEK_END");
+		return -1;
+	}
+
+	struct cookie file_cookie = {file_fd, off};
+	file = fopencookie(&file_cookie, "a", (cookie_io_functions_t){
+		.write = cookie_write
+	});
+	//file = fdopen(file_fd, "a");
 	if(file == NULL) {
-		perror("fdopen");
+		//perror("fdopen");
+		perror("fopencookie");
 		return -1;
 	}
 
-	if(prctl(PR_SET_SECCOMP, SECCOMP_MODE_STRICT) == -1) {
-		perror("prctl PR_SET_SECCOMP SECCOMP_MODE_STRICT");
-		return -1;
-	}
-
-	/**** from now on only read, write and _exit syscalls allowed ****/
-	
 	// explicitly set buffer to avoid fstat probe
 	setbuf(file, buf);
 
@@ -230,6 +244,11 @@ compend(void)
 
 	if(ferror(file) || feof(file)) {
 		perror("File writting failed");
+		return -1;
+	}
+
+	if(lseek(file_fd, file_cookie.offset, SEEK_SET) == -1) {
+		perror("lseek SEEK_SET");
 		return -1;
 	}
 
