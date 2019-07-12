@@ -228,6 +228,11 @@ compend(void)
 
 	fflush(file);
 
+	if(ferror(file) || feof(file)) {
+		perror("File writting failed");
+		return -1;
+	}
+
 	setbuf(stdout, buf);
 	printf(
 		"HTTP/1.0 302 Ok\r\n"
