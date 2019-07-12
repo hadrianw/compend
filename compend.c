@@ -35,7 +35,7 @@ compend(void)
 {
 	int ret;
 	long content_length;
-	char in_buf[8192+1];
+	char in_buf[8192];
 	int in_len;
 	char buf[BUFSIZ];
 	int file_fd;
@@ -67,13 +67,12 @@ compend(void)
 	}
 
 	in_len = fread(in_buf, 1, sizeof(in_buf), stdin);
-	if(in_len >= (int)sizeof(in_buf)) {
-		fputs("Too much data\n", stderr);
+	if(ferror(stdin) || (content_length > 0 && content_length != in_len)) {
+		perror("Error reading data");
 		return -1;
 	}
-
-	if(ferror(stdin) || !feof(stdin) || (content_length > 0 && content_length != in_len)) {
-		perror("Error reading data");
+	if(!feof(stdin)) {
+		fputs("Too much data");
 		return -1;
 	}
 
